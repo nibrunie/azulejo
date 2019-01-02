@@ -44,36 +44,41 @@ def sub_metric(img):
 
 
 
-def build_image_library(original_library, metric_fct, dump_dir):
+def build_image_library(original_library, metric_fct, dump_dir, tile_angles):
     if not os.path.isdir(dump_dir):
         print("creating directory {}".format(dump_dir))
         os.mkdir(dump_dir)
     image_library = []
     pixel_library = [f for f in os.listdir(dump_dir) if isfile(join(dump_dir, f))]
-    for filename in [f for f in os.listdir(original_library) if isfile(join(original_library, f))]:
-        print("processing {}".format(filename))
-        base = os.path.basename(filename)
-        prefix, extension = os.path.splitext(filename)
-        thumb_filename = prefix + "_{}x{}".format(THUMB_W, THUMB_H) + extension
-        if extension.lower() in [".png", ".jpg"]:
-            if thumb_filename in pixel_library:
-                print("pixel found in temporary library")
-                thumb = cv2.imread(join(dump_dir, thumb_filename))
-            else:
-                print("pixel NOT found in temporary library")
-                picture = cv2.imread(join(original_library, filename))
-                thumb = cv2.resize(picture, (THUMB_W, THUMB_H))
-            #average = thumb.mean(axis=0).mean(axis=0)
-            metric = metric_fct(thumb)
-            cv2.imwrite(os.path.join(dump_dir, thumb_filename), thumb)
-            image_library.append((metric, thumb))
+    for dirpath, dirnames, filenames in os.walk(original_library):
+        for _f in filenames:
+            filename = os.path.join(original_library, dirpath, _f)
+            print("processing {}".format(filename))
+            base = os.path.basename(filename)
+            prefix, extension = os.path.splitext(base)
+            thumb_filename = prefix + "_{}x{}".format(THUMB_W, THUMB_H) + extension
+            if extension.lower() in [".png", ".jpg"]:
+                if thumb_filename in pixel_library:
+                    print("pixel found in temporary library")
+                    thumb = cv2.imread(join(dump_dir, thumb_filename))
+                else:
+                    print("pixel NOT found in temporary library")
+                    picture = cv2.imread(filename)
+                    thumb = cv2.resize(picture, (THUMB_W, THUMB_H))
+                    # saving thumbnail
+                    cv2.imwrite(os.path.join(dump_dir, thumb_filename), thumb)
+                for rot_angle in tile_angles:
+                    M = cv2.getRotationMatrix2D((THUMB_W/2,THUMB_H/2),rot_angle,1)
+                    new_tile = cv2.warpAffine(thumb,M,(THUMB_W,THUMB_H))
+                    metric = metric_fct(new_tile)
+                    image_library.append((metric, new_tile))
+    print("{} image(s) library has been generated".format(len(image_library)))
     return image_library
 
 
 def build_mosaic(metric_fct, image_library, random_size=6):
     for tile_y in range(source_heigth / THUMB_H):
         for tile_x in range(source_width / THUMB_W):
-            print("tile: {}, {}".format(tile_x, tile_y))
             x = tile_x * THUMB_W
             y = tile_y * THUMB_H
             local_thumb = source[y:(y+THUMB_H), x:(x+THUMB_W)]
@@ -89,7 +94,7 @@ def build_mosaic(metric_fct, image_library, random_size=6):
                 return math.sqrt(value)
             closest_list = sorted(image_library, key=dist)[:random_size]
             #closest = random.choice(closest_list)[1]
-            closest = min(closest_list, key=sub_dist)[1]
+            closest = sorted(closest_list, key=sub_dist)[random.randrange(random_size)][1]
             dest[y:(y+THUMB_H), x:(x+THUMB_W)] = closest
 
 
@@ -104,6 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--random-size", default=6, type=int, help='size of the closest pixel set to chose from')
     parser.add_argument("--source-coeff", default=0.25, type=float, help='coefficient of source image in final output blending')
     parser.add_argument("--mosaic-coeff", default=0.75, type=float, help='coefficient of generated mosaic image in final output blending')
+    parser.add_argument("--tile-angles", default=[0], type=(lambda s: [float(v) for v in s.split(",")]), help="list of possible angles for the tiles")
 
     args = parser.parse_args()
 
@@ -118,7 +124,7 @@ if __name__ == "__main__":
     dest = np.zeros((source_heigth, source_width, 3), np.uint8)
     print("loading image from library")
 
-    image_library = build_image_library(args.library, args.metric, args.pixel_dir)
+    image_library = build_image_library(args.library, args.metric, args.pixel_dir, args.tile_angles)
     build_mosaic(args.metric, image_library, args.random_size)
     dest = cv2.addWeighted(source, args.source_coeff, dest, args.mosaic_coeff, 0)
     cv2.imwrite(args.dest, dest)
