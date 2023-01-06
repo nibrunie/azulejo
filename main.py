@@ -130,7 +130,7 @@ def load_pixel_library(pixel_dir, metric_fct, tile_angles, verbose=False, sampli
         return image_library
 
 
-def build_mosaic(metric_fct, image_library, random_size=6):
+def buildMosaicTiles(metric_fct, image_library, random_size=6):
     """ Building a mozaic approximating the source image """
     # iterating over 2D tiles of the source image. each tile is THUMB_W x THUMB_H
     #   - for each tile select the closest library thumbnail
@@ -207,15 +207,41 @@ def build_mosaic(metric_fct, image_library, random_size=6):
                 closestIdx = getClosestTile(src_average)
                 closest = linImgLib[closestIdx][1]
             tiles[(tile_x, tile_y)] = closest
+    return tiles
+
+def generateSingleImage(tiles, stripes=None):
+    # generate mosaic image
+    dest = np.zeros((source_heigth, source_width, 3), np.uint8)
+    NUM_TILES_X = source_width // THUMB_W
+    for tile_y in range(source_heigth // THUMB_H):
+        y = tile_y * THUMB_H
+        for tile_x in range(NUM_TILES_X):
+            x = tile_x * THUMB_W
+            closest = tiles[(tile_x, tile_y)]
+            local_thumb = source[y:(y+THUMB_H), x:(x+THUMB_W)]
+            alphaThumb = 0.4
+            alphaSource = 1 - alphaThumb
+            dest[y:(y+THUMB_H), x:(x+THUMB_W)] = closest * alphaThumb + local_thumb * alphaSource
+    # stripes
+    addStripe = not stripes is None
+    if addStripe:
+        stripeWidth, nextStripe = stripes
+        for stripe in range(0, source_width, stripeWidth):
+            # p = stripe / source_width / 2
+            # black = random.random() > (1 - p) 
+            index = stripe // stripeWidth
+            black = index == nextStripe
+            if black:
+                dest[0:source_heigth,stripe:stripe+stripeWidth] = 0
+                nextStripe = index + max(int(50 * (1.0 - (index / (source_width // stripeWidth))**2)), 2)
     
+    return dest
 
+def generateVideo(tiles, source_width, source_height, w=1024, h=768, NUM_FRAMES=250, EXTRA_FRAMES=250, videoFileName="mosaic-video.avi", FPS=25):
     # recombing closest and source tiles with complementary alpha values
-    frameSize = (1024, 768)
-    FPS = 25
-    out = cv2.VideoWriter('output_video-2.avi',cv2.VideoWriter_fourcc(*'DIVX'), FPS, frameSize)
+    frameSize = (w, h)
+    out = cv2.VideoWriter(videoFileName, cv2.VideoWriter_fourcc(*'DIVX'), FPS, frameSize)
 
-    NUM_FRAMES = 250
-    EXTRA_FRAMES = 250
     for i in range(NUM_FRAMES):
         # generating empty image for destination
         print(f"generating frame {i}")
@@ -239,20 +265,6 @@ def build_mosaic(metric_fct, image_library, random_size=6):
         out.write(img)
 
     out.release()
-    # stripes
-    if False:
-        stripe_width = 10
-        next_stripe =  100
-        for stripe in range(0, source_width, stripe_width):
-            # p = stripe / source_width / 2
-            # black = random.random() > (1 - p) 
-            index = stripe // stripe_width
-            black = index == next_stripe
-            if black:
-                dest[0:source_heigth,stripe:stripe+stripe_width] = 0
-                next_stripe = index + max(int(50 * (1.0 - (index / (source_width // stripe_width))**2)), 2)
-    
-    return dest
 
 
 class PerfMetric:
@@ -283,6 +295,7 @@ if __name__ == "__main__":
     parser.add_argument("--tile-angles", default=[0], type=(lambda s: [float(v) for v in s.split(",")]), help="list of possible angles for the tiles")
     parser.add_argument("--verbose", default=False, const=True, action="store_const", help="display more verbose info messages")
     parser.add_argument("--sampling", default=None, type=int, action="store", help="select a sample of the library (random)")
+    parser.add_argument("--stripes", default=None, type=(lambda s: map(int, s.split(','))), action="store", help="optionally add stripes, option values is (width, step)")
 
     args = parser.parse_args()
 
@@ -297,6 +310,7 @@ if __name__ == "__main__":
     print("loading image from library")
 
     genLibMetric    = PerfMetric("thumbnail generation")
+    genTilesMetric  = PerfMetric("tiles     generation")
     genMosaicMetric = PerfMetric("mosaic    generation")
 
     genLibMetric.start()
@@ -304,17 +318,21 @@ if __name__ == "__main__":
         image_library = build_image_library(args.library, args.metric, args.pixel_dir, args.tile_angles, args.verbose, args.sampling)
     else:
         image_library = load_pixel_library(args.pixel_dir, args.metric, args.tile_angles, args.verbose, args.sampling)
-
     genLibMetric.stop()
 
+
+    genTilesMetric.start()
+    tiles = buildMosaicTiles(args.metric, image_library, args.random_size)
+    genTilesMetric.stop()
+
     genMosaicMetric.start()
-    dest = build_mosaic(args.metric, image_library, args.random_size)
+    dest = generateSingleImage(tiles, args.stripes) 
     genMosaicMetric.stop()
 
     # dest = cv2.addWeighted(source, args.source_coeff, dest, args.mosaic_coeff, 0)
     cv2.imwrite(args.dest, dest)
 
-    for metric in [genLibMetric, genMosaicMetric]:
+    for metric in [genLibMetric, genTilesMetric, genMosaicMetric]:
         print(metric.summary())
 
 
