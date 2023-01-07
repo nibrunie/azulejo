@@ -242,22 +242,49 @@ def generateVideo(tiles, source_width, source_height, w=1024, h=768, NUM_FRAMES=
     frameSize = (w, h)
     out = cv2.VideoWriter(videoFileName, cv2.VideoWriter_fourcc(*'DIVX'), FPS, frameSize)
 
+    NUM_TILES_X = source_width // THUMB_W
+    mosaicSplitDeltaFrames = 20
+
+    # building source tile array
+    sourceTiles = {}
+    for tile_x in range(NUM_TILES_X):
+        x = tile_x * THUMB_W
+        for tile_y in range(source_heigth // THUMB_H):
+            y = tile_y * THUMB_H
+            local_thumb = source[y:(y+THUMB_H), x:(x+THUMB_W)]
+            sourceTiles[(tile_x, tile_y)] = local_thumb
+
     for i in range(NUM_FRAMES):
         # generating empty image for destination
         print(f"generating frame {i}")
         frame = np.zeros((source_heigth, source_width, 3), np.uint8)
-        mosaicSplitX = 1 - i / NUM_FRAMES
-        NUM_TILES_X = source_width // THUMB_W
-        for tile_y in range(source_heigth // THUMB_H):
-            y = tile_y * THUMB_H
-            for tile_x in range(NUM_TILES_X):
-                x = tile_x * THUMB_W
+        # number of frames between the time a column of tiles start to appear as mosaic
+        # (with the source image still having the majority of alpha) and the time the
+        # tile column only appear as mosaic (alpha source = 0.0)
+        splitStartXRaw   = 1 - i / (NUM_FRAMES - 1 - mosaicSplitDeltaFrames)
+        splitStartX      = max(0, splitStartXRaw)
+        splitStopX       = min(1, 1 - (i - mosaicSplitDeltaFrames) / (NUM_FRAMES - 1 - mosaicSplitDeltaFrames))
+        tileStartIdx     = int(splitStartX * NUM_TILES_X)
+        tileStopIdx      = int(splitStopX  * NUM_TILES_X)
+        for tile_x in range(NUM_TILES_X):
+            x = tile_x * THUMB_W
+            if tile_x < tileStartIdx:
+                alphaThumb = 0
+            elif tile_x >= tileStopIdx:
+                alphaThumb = 1
+            else:
+                alphaThumb = max(0, min(1, (x / source_width - splitStartXRaw) / (mosaicSplitDeltaFrames / NUM_FRAMES)))
+            alphaSource = 1 - alphaThumb
+            for tile_y in range(source_heigth // THUMB_H):
+                y = tile_y * THUMB_H
                 closest = tiles[(tile_x, tile_y)]
-                local_thumb = source[y:(y+THUMB_H), x:(x+THUMB_W)]
-                deltaX = tile_x - mosaicSplitX * NUM_TILES_X
-                alphaThumb = 0 if deltaX < 0 else (deltaX / ((1 - mosaicSplitX) * NUM_TILES_X))
-                alphaSource = 1 - alphaThumb
-                frame[y:(y+THUMB_H), x:(x+THUMB_W)] = closest * alphaThumb + local_thumb * alphaSource
+                local_thumb = sourceTiles[(tile_x, tile_y)]
+                if alphaThumb == 0:
+                    frame[y:(y+THUMB_H), x:(x+THUMB_W)] = local_thumb
+                elif alphaThumb == 1.0:
+                    frame[y:(y+THUMB_H), x:(x+THUMB_W)] = closest
+                else:
+                    frame[y:(y+THUMB_H), x:(x+THUMB_W)] = closest * alphaThumb + local_thumb * alphaSource
         img = cv2.resize(frame, frameSize)
         out.write(img)
 
@@ -299,13 +326,21 @@ if __name__ == "__main__":
     parser.add_argument("--stripes", default=None, type=(lambda s: map(int, s.split(','))), action="store", help="optionally add stripes, option values is (width, step)")
 
     subParsers = parser.add_subparsers()
+    def cmdLineVideoGen(args, tiles):
+        frameW, frameH = args.size
+        generateVideo(tiles, source_width, source_heigth, frameW,
+                      frameH, args.num_frames, args.extra_frames,
+                      videoFileName=args.output)
+    videoCmdParser = subParsers.add_parser('video', help='generate video output')
+    videoCmdParser.add_argument("--size", default=(1024,768), type=(lambda s: map(int, s.split(','))), help="video frame size")
+    videoCmdParser.add_argument("--num-frames", default=250,  type=int, help="number of video frames")
+    videoCmdParser.add_argument("--extra-frames", default=250,  type=int, help="number of extra (still) frames")
+    videoCmdParser.add_argument("--output", default="mosaic-video.avi",  type=str, help="filename for the output video")
+    videoCmdParser.set_defaults(func=cmdLineVideoGen)
+
     def cmdLineSingleImgGen(args, tiles):
         dest = generateSingleImage(tiles, args.stripes) 
         cv2.imwrite(args.dest, dest)
-    def cmdLineVideoGen(args, tiles):
-        generateVideo(tiles, source_width, source_heigth)
-    videoCmdParser = subParsers.add_parser('video', help='generate video output')
-    videoCmdParser.set_defaults(func=cmdLineVideoGen)
     imageCmdParser = subParsers.add_parser('image', help="generate image output")
     imageCmdParser.set_defaults(func=cmdLineSingleImgGen)
 
