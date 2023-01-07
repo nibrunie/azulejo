@@ -297,6 +297,17 @@ if __name__ == "__main__":
     parser.add_argument("--sampling", default=None, type=int, action="store", help="select a sample of the library (random)")
     parser.add_argument("--stripes", default=None, type=(lambda s: map(int, s.split(','))), action="store", help="optionally add stripes, option values is (width, step)")
 
+    subParsers = parser.add_subparsers()
+    def cmdLineSingleImgGen(args, tiles):
+        dest = generateSingleImage(tiles, args.stripes) 
+        cv2.imwrite(args.dest, dest)
+    def cmdLineVideoGen(args, tiles):
+        generateVideo(tiles, source_width, source_heigth)
+    videoCmdParser = subParsers.add_parser('video', help='generate video output')
+    videoCmdParser.set_defaults(func=cmdLineVideoGen)
+    imageCmdParser = subParsers.add_parser('image', help="generate image output")
+    imageCmdParser.set_defaults(func=cmdLineSingleImgGen)
+
     args = parser.parse_args()
 
     THUMB_W, THUMB_H = args.thumb_size
@@ -325,12 +336,11 @@ if __name__ == "__main__":
     tiles = buildMosaicTiles(args.metric, image_library, args.random_size)
     genTilesMetric.stop()
 
+
     genMosaicMetric.start()
-    dest = generateSingleImage(tiles, args.stripes) 
+    args.func(args, tiles)
     genMosaicMetric.stop()
 
-    # dest = cv2.addWeighted(source, args.source_coeff, dest, args.mosaic_coeff, 0)
-    cv2.imwrite(args.dest, dest)
 
     for metric in [genLibMetric, genTilesMetric, genMosaicMetric]:
         print(metric.summary())
