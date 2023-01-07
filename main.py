@@ -130,7 +130,7 @@ def load_pixel_library(pixel_dir, metric_fct, tile_angles, verbose=False, sampli
         return image_library
 
 
-def buildMosaicTiles(metric_fct, image_library, random_size=6):
+def buildMosaicTiles(metric_fct, image_library, random_size=6, fast=False):
     """ Building a mozaic approximating the source image """
     # iterating over 2D tiles of the source image. each tile is THUMB_W x THUMB_H
     #   - for each tile select the closest library thumbnail
@@ -198,14 +198,14 @@ def buildMosaicTiles(metric_fct, image_library, random_size=6):
                 delta = src_sub - sub_metric(lib_img[1])
                 value = np.dot(delta, delta.transpose())
                 return math.sqrt(value)
-            if False:
+            if fast:
+                closestIdx = getClosestTile(src_average)
+                closest = linImgLib[closestIdx][1]
+            else:
                 closest_list = sorted(image_library, key=dist)[:random_size]
                 closest = random.choice(closest_list)[1]
                 #closest = sorted(closest_list, key=sub_dist)[random.randrange(random_size)][1]
                 #closest = closest_list[random.randrange(random_size)][1]
-            else:
-                closestIdx = getClosestTile(src_average)
-                closest = linImgLib[closestIdx][1]
             tiles[(tile_x, tile_y)] = closest
     return tiles
 
@@ -287,6 +287,7 @@ if __name__ == "__main__":
     parser.add_argument("--pixel-dir", default="./.mosaic_libs/", type=str, help="directory to save pixel thumbnails")
     parser.add_argument('--source', type=str, help='path to source image')
     parser.add_argument('--dest', default="mosaic.png", type=str, help='path to destination image')
+    parser.add_argument('--fast', default=False, const=True, action="store_const", help="accelerate closest tile selection with fast and less accurate method")
     parser.add_argument('--metric', default=average_metric, type=parse_metric, help='set metric to determine closest thumbnail')
     parser.add_argument("--thumb-size", default=(32, 32), type=parse_int_tuple, help='set thumbnail size')
     parser.add_argument("--random-size", default=6, type=int, help='size of the closest pixel set to chose from')
@@ -333,7 +334,7 @@ if __name__ == "__main__":
 
 
     genTilesMetric.start()
-    tiles = buildMosaicTiles(args.metric, image_library, args.random_size)
+    tiles = buildMosaicTiles(args.metric, image_library, args.random_size, args.fast)
     genTilesMetric.stop()
 
 
