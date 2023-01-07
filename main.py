@@ -153,6 +153,9 @@ def buildMosaicTiles(metric_fct, image_library, random_size=6, fast=False):
     max_v = np.array([max_0, max_1, max_2])
     delta_v = max_v - min_v
 
+    numTilesReq = (source_heigth / THUMB_H) * (source_width / THUMB_W)
+    assert numTilesReq <= len(image_library), f"there should more tiles in the library ({len(image_library)} than the required number of tiles ({numTilesReq})"
+
     def tileLinearizedMetric(metric):
         # saturating the current vector metric between min and max value
         saturatedMetric = np.maximum(np.minimum(metric, max_v), min_v)
@@ -162,10 +165,17 @@ def buildMosaicTiles(metric_fct, image_library, random_size=6, fast=False):
 
     linImgLib = sorted(image_library, key=lambda metric_tile: tileLinearizedMetric(metric_tile[0]))
     linImgMetric = [tileLinearizedMetric(metric) for (metric, tile) in linImgLib]
-    imgMaxIdx = len(linImgLib)
+
+    def retrieveTile(index):
+        """ get and remove index-tile from library """
+        tile = linImgLib.pop(index)
+        linImgMetric.pop(index)
+        return tile
+
     def getClosestTile(metric):
         # using a median pivot to locate in logarithm time, <random_size> closest
         # neighbours
+        imgMaxIdx = len(linImgLib) # this needs to be evaluated here (and not factorized) as the tile could have been updated
         scalarMetric = tileLinearizedMetric(metric)
         idx = imgMaxIdx // 2
         idxSup = imgMaxIdx - 1
@@ -200,12 +210,13 @@ def buildMosaicTiles(metric_fct, image_library, random_size=6, fast=False):
                 return math.sqrt(value)
             if fast:
                 closestIdx = getClosestTile(src_average)
-                closest = linImgLib[closestIdx][1]
+                closest = retrieveTile(closestIdx)[1] # retrieving and removing tile from the list to ensure it is only used once
             else:
-                closest_list = sorted(image_library, key=dist)[:random_size]
-                closest = random.choice(closest_list)[1]
-                #closest = sorted(closest_list, key=sub_dist)[random.randrange(random_size)][1]
-                #closest = closest_list[random.randrange(random_size)][1]
+                enumeratedLib = list((m, img, idx) for (idx, (m, img)) in enumerate(image_library))
+                closest_list = sorted(enumeratedLib, key=dist)[:random_size]
+                imgTriple = random.choice(closest_list)
+                closest = imgTriple[1]
+                image_library.pop(imgTriple[2]) # remove (metric, closest) to ensure each tile is only used once
             tiles[(tile_x, tile_y)] = closest
     return tiles
 
