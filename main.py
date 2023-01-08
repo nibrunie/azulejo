@@ -255,7 +255,7 @@ class WaveAlphaGenerator(AlphaGenerator):
     def __init__(self, cfg, videoCfg, sourceCfg, mosaicSplitDeltaFrames):
         self.cfg = cfg
         self.videoCfg = videoCfg
-        self.mosaicSplitDeltaFrame = mosaicSplitDeltaFrames
+        self.mosaicSplitDeltaFrames = mosaicSplitDeltaFrames
         # number of frames between the time a column of tiles start to appear as mosaic
         # (with the source image still having the majority of alpha) and the time the
         # tile column only appear as mosaic (alpha source = 0.0)
@@ -269,7 +269,7 @@ class WaveAlphaGenerator(AlphaGenerator):
         self.tileStopIdx      = int(self.splitStopX  * self.NUM_TILES_X)
 
     def getAlpha(self, frameId, tile_x, tile_y):
-        deltaAlpha = self.maxAlphaTile - self.minAlphaTile
+        deltaAlpha = self.cfg.maxAlphaTile - self.cfg.minAlphaTile
         x = tile_x * cfg.tileW
         if tile_x < self.tileStartIdx:
             alphaThumb = self.cfg.minAlphaTile
@@ -287,6 +287,8 @@ def generateVideo(cfg, videoCfg, source, tiles, w=1024, h=768, videoFileName="mo
     NUM_TILES_X = source.width // cfg.tileW
     mosaicSplitDeltaFrames = 20
 
+    alphaGen = WaveAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
+
     # building source tile array
     sourceTiles = {}
     for tile_x in range(NUM_TILES_X):
@@ -300,22 +302,10 @@ def generateVideo(cfg, videoCfg, source, tiles, w=1024, h=768, videoFileName="mo
         # generating empty image for destination
         print(f"generating frame {i}")
         frame = np.zeros((source.height, source.width, 3), np.uint8)
-        # number of frames between the time a column of tiles start to appear as mosaic
-        # (with the source image still having the majority of alpha) and the time the
-        # tile column only appear as mosaic (alpha source = 0.0)
-        splitStartXRaw   = 1 - i / (videoCfg.numFrames - 1 - mosaicSplitDeltaFrames)
-        splitStartX      = max(0, splitStartXRaw)
-        splitStopX       = min(1, 1 - (i - mosaicSplitDeltaFrames) / (videoCfg.numFrames - 1 - mosaicSplitDeltaFrames))
-        tileStartIdx     = int(splitStartX * NUM_TILES_X)
-        tileStopIdx      = int(splitStopX  * NUM_TILES_X)
+        alphaGen.updateToFrame(i)
         for tile_x in range(NUM_TILES_X):
             x = tile_x * cfg.tileW
-            if tile_x < tileStartIdx:
-                alphaThumb = cfg.minAlphaTile
-            elif tile_x >= tileStopIdx:
-                alphaThumb = cfg.maxAlphaTile
-            else:
-                alphaThumb = cfg.minAlphaTile + (cfg.maxAlphaTile - cfg.minAlphaTile) * max(0, min(1, (x / source.width - splitStartXRaw) / (mosaicSplitDeltaFrames / videoCfg.numFrames)))
+            alphaThumb = alphaGen.getAlpha(i, tile_x, tile_y)
             alphaSource = 1 - alphaThumb
             for tile_y in range(source.height // cfg.tileH):
                 y = tile_y * cfg.tileH
