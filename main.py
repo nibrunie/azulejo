@@ -248,20 +248,28 @@ def generateSingleImage(cfg, source, tiles, stripes=None):
     return dest
 
 class AlphaGenerator:
+    generators = {}
     def getAlpha(self, frameId, tile_x, tile_y):
         raise NotImplementedError
 
+    @staticmethod
+    def RegisteredAlphaGenerator(genCls):
+        AlphaGenerator.generators[genCls.label] = genCls 
+        return genCls
+
+@AlphaGenerator.RegisteredAlphaGenerator
 class WaveAlphaGenerator(AlphaGenerator):
+    label = "wave"
     def __init__(self, cfg, videoCfg, sourceCfg, mosaicSplitDeltaFrames):
         self.cfg = cfg
         self.videoCfg = videoCfg
         self.mosaicSplitDeltaFrames = mosaicSplitDeltaFrames
-        # number of frames between the time a column of tiles start to appear as mosaic
-        # (with the source image still having the majority of alpha) and the time the
-        # tile column only appear as mosaic (alpha source = 0.0)
         self.NUM_TILES_X = sourceCfg.width // cfg.tileW
 
     def updateToFrame(self, frameId):
+        # number of frames between the time a column of tiles start to appear as mosaic
+        # (with the source image still having the majority of alpha) and the time the
+        # tile column only appear as mosaic (alpha source = 0.0)
         self.splitStartXRaw   = 1 - frameId / (self.videoCfg.numFrames - 1 - self.mosaicSplitDeltaFrames)
         self.splitStartX      = max(0, self.splitStartXRaw)
         self.splitStopX       = min(1, 1 - (frameId - self.mosaicSplitDeltaFrames) / (self.videoCfg.numFrames - 1 - self.mosaicSplitDeltaFrames))
@@ -279,15 +287,73 @@ class WaveAlphaGenerator(AlphaGenerator):
             alphaThumb = self.cfg.minAlphaTile + (deltaAlpha) * max(0, min(1, (x / source.width - self.splitStartXRaw) / (self.mosaicSplitDeltaFrames / self.videoCfg.numFrames)))
         return alphaThumb
 
+
+@AlphaGenerator.RegisteredAlphaGenerator
+class RandomAlphaGenerator(AlphaGenerator):
+    label = "random"
+    def __init__(self, cfg, videoCfg, sourceCfg, mosaicSplitDeltaFrames):
+        self.cfg = cfg
+        self.videoCfg = videoCfg
+        self.mosaicSplitDeltaFrames = mosaicSplitDeltaFrames
+        self.NUM_TILES_X = sourceCfg.width // cfg.tileW
+        self.NUM_TILES_Y = sourceCfg.height // cfg.tileH
+        maxStartFrame = (self.videoCfg.numFrames - mosaicSplitDeltaFrames)
+        self.startFrame         = [[int(random.random() * maxStartFrame) for i in range(self.NUM_TILES_Y)] for j in range(self.NUM_TILES_X)]
+        self.deltaAlphaPerFrame = [[1 / ((0.5 + 0.5 * random.random()) * mosaicSplitDeltaFrames) for i in range(self.NUM_TILES_Y)] for j in range(self.NUM_TILES_X)]
+
+    def updateToFrame(self, frameId):
+        pass
+
+    def getAlpha(self, frameId, tile_x, tile_y):
+        if frameId < self.startFrame[tile_x][tile_y]:
+            alphaThumb = self.cfg.minAlphaTile
+        else:
+            alphaOffset = (frameId - self.startFrame[tile_x][tile_y]) * self.deltaAlphaPerFrame[tile_x][tile_y]
+            alphaThumb = min(self.cfg.maxAlphaTile, self.cfg.minAlphaTile + (self.cfg.maxAlphaTile - self.cfg.minAlphaTile) * alphaOffset)
+        return alphaThumb
+    
+
+@AlphaGenerator.RegisteredAlphaGenerator
+class FireworksAlphaGenerator(RandomAlphaGenerator):
+    label = "fireworks"
+    def __init__(self, cfg, videoCfg, sourceCfg, mosaicSplitDeltaFrames):
+        self.cfg = cfg
+        self.videoCfg = videoCfg
+        self.mosaicSplitDeltaFrames = mosaicSplitDeltaFrames
+        self.NUM_TILES_X = sourceCfg.width // cfg.tileW
+        self.NUM_TILES_Y = sourceCfg.height // cfg.tileH
+        maxStartFrame = (self.videoCfg.numFrames - mosaicSplitDeltaFrames)
+        numCenters = random.randrange(10, 20)
+        centers = [(random.randrange(self.NUM_TILES_X), random.randrange(self.NUM_TILES_Y)) for i in range(numCenters)]
+        self.startFrame         = [[int(random.random() * maxStartFrame) for i in range(self.NUM_TILES_Y)] for j in range(self.NUM_TILES_X)]
+        self.deltaAlphaPerFrame = [[1 / ((0.5 + 0.5 * random.random()) * mosaicSplitDeltaFrames) for i in range(self.NUM_TILES_Y)] for j in range(self.NUM_TILES_X)]
+
+        for (cx, cy) in centers:
+            self.startFrame[cx][cy] = random.randrange(maxStartFrame) # // 3, maxStartFrame // 2)
+
+        for tile_x in range(self.NUM_TILES_X):
+            for tile_y in range(self.NUM_TILES_Y):
+                def distToCenter(center):
+                    (cx, cy) = center
+                    return (tile_x - cx)**2 + (tile_y - cy)**2
+                #(cx,cy) = min(centers, key=distToCenter)
+                #distToClosestCenter = int(math.sqrt((cx - tile_x)**2 + (cy - tile_y)**2))
+                self.startFrame[tile_x][tile_y] = min(self.startFrame[cx][cy] + int(2 * math.sqrt((cx - tile_x)**2 + (cy - tile_y)**2)) for (cx, cy) in centers)
+                self.deltaAlphaPerFrame[tile_x][tile_y] = 1 / (0.5 * mosaicSplitDeltaFrames)
+
 def generateVideo(cfg, videoCfg, source, tiles, w=1024, h=768, videoFileName="mosaic-video.avi", FPS=25):
     # recombing closest and source tiles with complementary alpha values
     frameSize = (w, h)
     out = cv2.VideoWriter(videoFileName, cv2.VideoWriter_fourcc(*'DIVX'), FPS, frameSize)
 
     NUM_TILES_X = source.width // cfg.tileW
-    mosaicSplitDeltaFrames = 20
+    mosaicSplitDeltaFrames = 40
 
-    alphaGen = WaveAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
+    # alphaGen = WaveAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
+    # alphaGen = RandomAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
+    # alphaGen = FireworksAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
+    alphaGen = videoCfg.alphaGenClass(cfg, videoCfg, source, mosaicSplitDeltaFrames)
+
 
     # building source tile array
     sourceTiles = {}
@@ -305,9 +371,9 @@ def generateVideo(cfg, videoCfg, source, tiles, w=1024, h=768, videoFileName="mo
         alphaGen.updateToFrame(i)
         for tile_x in range(NUM_TILES_X):
             x = tile_x * cfg.tileW
-            alphaThumb = alphaGen.getAlpha(i, tile_x, tile_y)
-            alphaSource = 1 - alphaThumb
             for tile_y in range(source.height // cfg.tileH):
+                alphaThumb = alphaGen.getAlpha(i, tile_x, tile_y)
+                alphaSource = 1 - alphaThumb
                 y = tile_y * cfg.tileH
                 closest = tiles[(tile_x, tile_y)]
                 local_thumb = sourceTiles[(tile_x, tile_y)]
@@ -355,9 +421,10 @@ class Configuration:
 
 class VideoConfiguration:
     """ Video-specific configuration """
-    def __init__(self, numFrames, extraFrames):
+    def __init__(self, numFrames, extraFrames, alphaGenLabel):
         self.numFrames = numFrames
         self.extraFrames = extraFrames
+        self.alphaGenClass = AlphaGenerator.generators[alphaGenLabel]
 
 class Source:
     """ structure to store source data and metadata """
@@ -395,7 +462,7 @@ if __name__ == "__main__":
     subParsers = parser.add_subparsers()
     def cmdLineVideoGen(args, cfg, source, tiles):
         frameW, frameH = args.size
-        videoCfg = VideoConfiguration(args.num_frames, args.extra_frames)
+        videoCfg = VideoConfiguration(args.num_frames, args.extra_frames, args.alpha_gen)
         generateVideo(cfg, videoCfg, source, tiles, frameW, frameH,
                       videoFileName=args.output)
     videoCmdParser = subParsers.add_parser('video', help='generate video output')
@@ -403,6 +470,7 @@ if __name__ == "__main__":
     videoCmdParser.add_argument("--num-frames", default=250,  type=int, help="number of video frames")
     videoCmdParser.add_argument("--extra-frames", default=250,  type=int, help="number of extra (still) frames")
     videoCmdParser.add_argument("--output", default="mosaic-video.avi",  type=str, help="filename for the output video")
+    videoCmdParser.add_argument("--alpha-gen", default="random",  type=str, choices=AlphaGenerator.generators.keys(), help="filename for the output video")
     videoCmdParser.set_defaults(func=cmdLineVideoGen)
 
     def cmdLineSingleImgGen(args, cfg, source, tiles):
@@ -431,7 +499,7 @@ if __name__ == "__main__":
     print("loading image from library")
     genLibMetric.start()
     if args.library:
-        image_library = build_image_library(cfg, args.library, args.metric, args.tile_angles, args.verbose, args.sampling)
+        image_library = build_image_library(cfg, args.metric, args.tile_angles, args.verbose, args.sampling)
     else:
         image_library = load_pixel_library(args.tile_dir, args.metric, args.tile_angles, args.verbose, args.sampling)
     genLibMetric.stop()
