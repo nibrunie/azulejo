@@ -247,7 +247,39 @@ def generateSingleImage(cfg, source, tiles, stripes=None):
     
     return dest
 
-def generateVideo(cfg, source, tiles, w=1024, h=768, NUM_FRAMES=250, EXTRA_FRAMES=250, videoFileName="mosaic-video.avi", FPS=25):
+class AlphaGenerator:
+    def getAlpha(self, frameId, tile_x, tile_y):
+        raise NotImplementedError
+
+class WaveAlphaGenerator(AlphaGenerator):
+    def __init__(self, cfg, videoCfg, sourceCfg, mosaicSplitDeltaFrames):
+        self.cfg = cfg
+        self.videoCfg = videoCfg
+        self.mosaicSplitDeltaFrame = mosaicSplitDeltaFrames
+        # number of frames between the time a column of tiles start to appear as mosaic
+        # (with the source image still having the majority of alpha) and the time the
+        # tile column only appear as mosaic (alpha source = 0.0)
+        self.NUM_TILES_X = sourceCfg.width // cfg.tileW
+
+    def updateToFrame(self, frameId):
+        self.splitStartXRaw   = 1 - frameId / (self.videoCfg.numFrames - 1 - self.mosaicSplitDeltaFrames)
+        self.splitStartX      = max(0, self.splitStartXRaw)
+        self.splitStopX       = min(1, 1 - (frameId - self.mosaicSplitDeltaFrames) / (self.videoCfg.numFrames - 1 - self.mosaicSplitDeltaFrames))
+        self.tileStartIdx     = int(self.splitStartX * self.NUM_TILES_X)
+        self.tileStopIdx      = int(self.splitStopX  * self.NUM_TILES_X)
+
+    def getAlpha(self, frameId, tile_x, tile_y):
+        deltaAlpha = self.maxAlphaTile - self.minAlphaTile
+        x = tile_x * cfg.tileW
+        if tile_x < self.tileStartIdx:
+            alphaThumb = self.cfg.minAlphaTile
+        elif tile_x >= self.tileStopIdx:
+            alphaThumb = self.cfg.maxAlphaTile
+        else:
+            alphaThumb = self.cfg.minAlphaTile + (deltaAlpha) * max(0, min(1, (x / source.width - self.splitStartXRaw) / (self.mosaicSplitDeltaFrames / self.videoCfg.numFrames)))
+        return alphaThumb
+
+def generateVideo(cfg, videoCfg, source, tiles, w=1024, h=768, videoFileName="mosaic-video.avi", FPS=25):
     # recombing closest and source tiles with complementary alpha values
     frameSize = (w, h)
     out = cv2.VideoWriter(videoFileName, cv2.VideoWriter_fourcc(*'DIVX'), FPS, frameSize)
@@ -264,26 +296,26 @@ def generateVideo(cfg, source, tiles, w=1024, h=768, NUM_FRAMES=250, EXTRA_FRAME
             local_thumb = source.data[y:(y+cfg.tileH), x:(x+cfg.tileW)]
             sourceTiles[(tile_x, tile_y)] = local_thumb
 
-    for i in range(NUM_FRAMES):
+    for i in range(videoCfg.numFrames):
         # generating empty image for destination
         print(f"generating frame {i}")
         frame = np.zeros((source.height, source.width, 3), np.uint8)
         # number of frames between the time a column of tiles start to appear as mosaic
         # (with the source image still having the majority of alpha) and the time the
         # tile column only appear as mosaic (alpha source = 0.0)
-        splitStartXRaw   = 1 - i / (NUM_FRAMES - 1 - mosaicSplitDeltaFrames)
+        splitStartXRaw   = 1 - i / (videoCfg.numFrames - 1 - mosaicSplitDeltaFrames)
         splitStartX      = max(0, splitStartXRaw)
-        splitStopX       = min(1, 1 - (i - mosaicSplitDeltaFrames) / (NUM_FRAMES - 1 - mosaicSplitDeltaFrames))
+        splitStopX       = min(1, 1 - (i - mosaicSplitDeltaFrames) / (videoCfg.numFrames - 1 - mosaicSplitDeltaFrames))
         tileStartIdx     = int(splitStartX * NUM_TILES_X)
         tileStopIdx      = int(splitStopX  * NUM_TILES_X)
         for tile_x in range(NUM_TILES_X):
             x = tile_x * cfg.tileW
             if tile_x < tileStartIdx:
-                alphaThumb = 0
+                alphaThumb = cfg.minAlphaTile
             elif tile_x >= tileStopIdx:
-                alphaThumb = 1
+                alphaThumb = cfg.maxAlphaTile
             else:
-                alphaThumb = max(0, min(1, (x / source.width - splitStartXRaw) / (mosaicSplitDeltaFrames / NUM_FRAMES)))
+                alphaThumb = cfg.minAlphaTile + (cfg.maxAlphaTile - cfg.minAlphaTile) * max(0, min(1, (x / source.width - splitStartXRaw) / (mosaicSplitDeltaFrames / videoCfg.numFrames)))
             alphaSource = 1 - alphaThumb
             for tile_y in range(source.height // cfg.tileH):
                 y = tile_y * cfg.tileH
@@ -298,7 +330,7 @@ def generateVideo(cfg, source, tiles, w=1024, h=768, NUM_FRAMES=250, EXTRA_FRAME
         img = cv2.resize(frame, frameSize)
         out.write(img)
 
-    for j in range(EXTRA_FRAMES):
+    for j in range(videoCfg.extraFrames):
         out.write(img)
 
     out.release()
@@ -324,10 +356,18 @@ class PerfMetric:
 class Configuration:
     """ structure to store run configuration, including:
         - tile dimensions """
-    def __init__(self, tileSize, imgDir, tileDir):
+    def __init__(self, tileSize, imgDir, tileDir, minAlphaTile=0, maxAlphaTile=1):
         self.tileW, self.tileH = tileSize
         self.imgDir = imgDir
         self.tileDir = tileDir
+        self.minAlphaTile = minAlphaTile
+        self.maxAlphaTile = maxAlphaTile
+
+class VideoConfiguration:
+    """ Video-specific configuration """
+    def __init__(self, numFrames, extraFrames):
+        self.numFrames = numFrames
+        self.extraFrames = extraFrames
 
 class Source:
     """ structure to store source data and metadata """
@@ -359,12 +399,14 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", default=False, const=True, action="store_const", help="display more verbose info messages")
     parser.add_argument("--sampling", default=None, type=int, action="store", help="select a sample of the library (random)")
     parser.add_argument("--stripes", default=None, type=(lambda s: map(int, s.split(','))), action="store", help="optionally add stripes, option values is (width, step)")
+    parser.add_argument("--min-alpha-tile", default=0, type=float, action="store", help="minimum alpha value for lib tile during composition")
+    parser.add_argument("--max-alpha-tile", default=0, type=float, action="store", help="maximum alpha value for lib tile during composition")
 
     subParsers = parser.add_subparsers()
     def cmdLineVideoGen(args, cfg, source, tiles):
         frameW, frameH = args.size
-        generateVideo(cfg, source, tiles, frameW,
-                      frameH, args.num_frames, args.extra_frames,
+        videoCfg = VideoConfiguration(args.num_frames, args.extra_frames)
+        generateVideo(cfg, videoCfg, source, tiles, frameW, frameH,
                       videoFileName=args.output)
     videoCmdParser = subParsers.add_parser('video', help='generate video output')
     videoCmdParser.add_argument("--size", default=(1024,768), type=(lambda s: map(int, s.split(','))), help="video frame size")
@@ -375,7 +417,7 @@ if __name__ == "__main__":
 
     def cmdLineSingleImgGen(args, cfg, source, tiles):
         dest = generateSingleImage(cfg, source, tiles, args.stripes) 
-        cv2.imwrite(args.dest, dest)
+        cv2.imwrite(args.output, dest)
     imageCmdParser = subParsers.add_parser('image', help="generate image output")
     imageCmdParser.add_argument('--output', default="mosaic.png", type=str, help='path to destination image')
     imageCmdParser.set_defaults(func=cmdLineSingleImgGen)
@@ -383,7 +425,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-    cfg = Configuration(args.tile_size, args.library, args.tile_dir)
+    cfg = Configuration(args.tile_size,
+                        args.library, args.tile_dir,
+                        args.min_alpha_tile, args.max_alpha_tile)
     source = Source(args.source)
 
     print("building destination image of size {} x {}".format(source.width, source.height))
