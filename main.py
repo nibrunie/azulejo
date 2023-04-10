@@ -329,15 +329,13 @@ class FireworksAlphaGenerator(RandomAlphaGenerator):
         self.deltaAlphaPerFrame = [[1 / ((0.5 + 0.5 * random.random()) * mosaicSplitDeltaFrames) for i in range(self.NUM_TILES_Y)] for j in range(self.NUM_TILES_X)]
 
         for (cx, cy) in centers:
-            self.startFrame[cx][cy] = random.randrange(maxStartFrame) # // 3, maxStartFrame // 2)
+            self.startFrame[cx][cy] = random.randrange(maxStartFrame)
 
         for tile_x in range(self.NUM_TILES_X):
             for tile_y in range(self.NUM_TILES_Y):
                 def distToCenter(center):
                     (cx, cy) = center
                     return (tile_x - cx)**2 + (tile_y - cy)**2
-                #(cx,cy) = min(centers, key=distToCenter)
-                #distToClosestCenter = int(math.sqrt((cx - tile_x)**2 + (cy - tile_y)**2))
                 self.startFrame[tile_x][tile_y] = min(self.startFrame[cx][cy] + int(2 * math.sqrt((cx - tile_x)**2 + (cy - tile_y)**2)) for (cx, cy) in centers)
                 self.deltaAlphaPerFrame[tile_x][tile_y] = 1 / (0.5 * mosaicSplitDeltaFrames)
 
@@ -349,11 +347,7 @@ def generateVideo(cfg, videoCfg, source, tiles, w=1024, h=768, videoFileName="mo
     NUM_TILES_X = source.width // cfg.tileW
     mosaicSplitDeltaFrames = 40
 
-    # alphaGen = WaveAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
-    # alphaGen = RandomAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
-    # alphaGen = FireworksAlphaGenerator(cfg, videoCfg, source, mosaicSplitDeltaFrames)
     alphaGen = videoCfg.alphaGenClass(cfg, videoCfg, source, mosaicSplitDeltaFrames)
-
 
     # building source tile array
     sourceTiles = {}
@@ -457,7 +451,7 @@ if __name__ == "__main__":
     parser.add_argument("--sampling", default=None, type=int, action="store", help="select a sample of the library (random)")
     parser.add_argument("--stripes", default=None, type=(lambda s: map(int, s.split(','))), action="store", help="optionally add stripes, option values is (width, step)")
     parser.add_argument("--min-alpha-tile", default=0, type=float, action="store", help="minimum alpha value for lib tile during composition")
-    parser.add_argument("--max-alpha-tile", default=0, type=float, action="store", help="maximum alpha value for lib tile during composition")
+    parser.add_argument("--max-alpha-tile", default=1.0, type=float, action="store", help="maximum alpha value for lib tile during composition")
 
     subParsers = parser.add_subparsers()
     def cmdLineVideoGen(args, cfg, source, tiles):
